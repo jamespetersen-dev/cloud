@@ -1,0 +1,435 @@
+#pragma kernel Box
+#pragma kernel Depth
+#pragma kernel SteppedDepth
+#pragma kernel Cloud
+
+
+struct BoxData {
+    float3 position;
+    float3 size;
+    float4 color;
+};
+
+struct CameraData {
+    float3 position;
+    float3 direction;
+    float fov;
+    float nearPlane;
+    float farPlane;
+    float aspectRatio;
+    int textureWidth;
+    int textureHeight;
+    float4 rotation;
+};
+
+RWTexture2D<float4> Result;
+StructuredBuffer<BoxData> boxData;
+StructuredBuffer<CameraData> cameraData;
+
+int boxCount;
+int maxStepCount;
+float maxDistance;
+float stepSize;
+
+float3 RotateRayDirection(float3 dir, float4 quat)
+{
+    float3 t = 2.0f * cross(quat.xyz, dir);
+    return dir + quat.w * t + cross(quat.xyz, t);
+}
+
+float DistanceToBox(float3 position, float3 boxPosition, float3 boxSize)
+{
+    float3 halfExtents = boxSize * 0.5;
+    
+    float3 boxMin = boxPosition - halfExtents;
+    float3 boxMax = boxPosition + halfExtents;
+    
+    float3 clampedPoint = clamp(position, boxMin, boxMax);
+    
+    float3 distanceVector = position - clampedPoint;
+    
+    return length(distanceVector);
+}
+
+float MinDistanceToBoxes(float3 position)
+{
+    float minimum = 1048575;
+    for (int i = 0; i < boxCount; i++)
+    {
+        minimum = min(minimum, DistanceToBox(position, boxData[i].position, boxData[i].size));
+    }
+    return minimum;
+}
+
+float MinDistanceToBox(float3 position, int boxId)
+{
+    float minimum = 1048575;
+    minimum = min(minimum, DistanceToBox(position, boxData[boxId].position, boxData[boxId].size));
+    return minimum;
+}
+
+bool RayBoxIntersection(float3 rayOrigin, float3 rayDir, float3 boxPosition, float3 boxSize, out float tEnter, out float tExit)
+{
+    float3 halfExtents = boxSize * 0.5;
+    float3 boxMin = boxPosition - halfExtents;
+    float3 boxMax = boxPosition + halfExtents;
+
+    float3 invDir = 1.0 / rayDir;
+    float3 t0 = (boxMin - rayOrigin) * invDir;
+    float3 t1 = (boxMax - rayOrigin) * invDir;
+
+    float3 tMinVec = min(t0, t1);
+    float3 tMaxVec = max(t0, t1);
+
+    tEnter = max(max(tMinVec.x, tMinVec.y), tMinVec.z);
+    tExit = min(min(tMaxVec.x, tMaxVec.y), tMaxVec.z);
+
+    return tExit > max(tEnter, 0.0); // Valid intersection if tExit > tEnter and both are positive
+}
+
+[numthreads(8, 8, 1)]
+void Cloud(uint3 id : SV_DispatchThreadID)
+{
+    CameraData camera = cameraData[0];
+
+    float2 screenCoord = (id.xy + 0.5) / float2(camera.textureWidth, camera.textureHeight);
+    float2 ndcCoord = screenCoord * 2.0 - 1.0;
+
+    float3 rayDir;
+    rayDir.x = ndcCoord.x * tan(camera.fov * 0.5 * 3.14159 / 180.0) * camera.aspectRatio;
+    rayDir.y = ndcCoord.y * tan(camera.fov * 0.5 * 3.14159 / 180.0);
+    rayDir.z = 1.0;
+
+    rayDir = normalize(rayDir);
+    rayDir = RotateRayDirection(rayDir, camera.rotation);
+
+    float3 rayOrigin = camera.position;
+    float3 rayPos = rayOrigin;
+
+    float3 color = float3(0.0, 0.0, 0.0);
+    float alpha = 0.0;
+
+    float totalCloudDepth = 0.0;
+    
+    for (int i = 0; i < boxCount; i++)
+    {
+        float localDepth = totalCloudDepth;
+        float3 localColor = boxData[i].color.rgb;
+        float localAlpha = boxData[i].color.a;
+        
+        float tEnter, tExit;
+        if (RayBoxIntersection(rayOrigin, rayDir, boxData[i].position, boxData[i].size, tEnter, tExit))
+        {
+            tEnter = ceil(tEnter * stepSize);
+            rayPos = rayOrigin + rayDir * tEnter;
+            
+            bool isInsideCloud = false;
+            float entryDepth = 0.0f;
+            float exitDepth = 0.0f;
+            
+            while (tEnter < tExit)
+            {
+                float distanceToSurface = MinDistanceToBox(rayPos, i);
+
+                if (distanceToSurface < 0.001)
+                {
+                    if (!isInsideCloud)
+                    {
+                        entryDepth = length(rayPos - rayOrigin);
+                        isInsideCloud = true;
+                    }
+                }
+                else
+                {
+                    if (isInsideCloud)
+                    {
+                        exitDepth = length(rayPos - rayOrigin);
+                        totalCloudDepth += exitDepth - entryDepth;
+                        break;
+                    }
+                }
+                
+                rayPos += rayDir * stepSize;
+                tEnter += stepSize;
+            }
+            
+            if (isInsideCloud)
+            {
+                exitDepth = length(rayPos - rayOrigin);
+                totalCloudDepth += exitDepth - entryDepth;
+            }
+            
+            //color = localColor * localAlpha + color * alpha * (1 - localAlpha);
+            //alpha = localAlpha + alpha * (1 - localAlpha);
+            localDepth = totalCloudDepth - localDepth;
+            color += localColor * localDepth;
+            alpha += localAlpha * localDepth;
+
+        }
+    }
+    
+    if (totalCloudDepth > 0.0)
+    {
+        float depthColor = clamp(totalCloudDepth / maxDistance, 0, 1);
+        color = color / totalCloudDepth;
+        alpha = alpha / totalCloudDepth;
+        Result[id.xy] = float4(color, alpha);
+    }
+    else
+    {
+        Result[id.xy] = float4(0, 0, 0, 0);
+    }
+}
+
+[numthreads(8, 8, 1)]
+void SteppedDepth(uint3 id : SV_DispatchThreadID)
+{
+    CameraData camera = cameraData[0];
+
+    float2 screenCoord = (id.xy + 0.5) / float2(camera.textureWidth, camera.textureHeight);
+    float2 ndcCoord = screenCoord * 2.0 - 1.0;
+
+    float3 rayDir;
+    rayDir.x = ndcCoord.x * tan(camera.fov * 0.5 * 3.14159 / 180.0) * camera.aspectRatio;
+    rayDir.y = ndcCoord.y * tan(camera.fov * 0.5 * 3.14159 / 180.0);
+    rayDir.z = 1.0;
+
+    rayDir = normalize(rayDir);
+    rayDir = RotateRayDirection(rayDir, camera.rotation);
+
+    float3 rayOrigin = camera.position;
+    float3 rayPos = rayOrigin;
+
+    float3 color = float3(0.0, 0.0, 0.0);
+    float alpha = 0.0;
+
+    float totalCloudDepth = 0.0;
+    
+    for (int i = 0; i < boxCount; i++)
+    {
+        float localDepth = totalCloudDepth;
+        float3 localColor = boxData[i].color.rgb;
+        float localAlpha = boxData[i].color.a;
+        
+        float tEnter, tExit;
+        if (RayBoxIntersection(rayOrigin, rayDir, boxData[i].position, boxData[i].size, tEnter, tExit))
+        {
+            tEnter = ceil(tEnter * stepSize);
+            rayPos = rayOrigin + rayDir * tEnter;
+            
+            bool isInsideCloud = false;
+            float entryDepth = 0.0f;
+            float exitDepth = 0.0f;
+            
+            while (tEnter < tExit)
+            {
+                float distanceToSurface = MinDistanceToBox(rayPos, i);
+
+                if (distanceToSurface < 0.001)
+                {
+                    if (!isInsideCloud)
+                    {
+                        entryDepth = length(rayPos - rayOrigin);
+                        isInsideCloud = true;
+                    }
+                }
+                else
+                {
+                    if (isInsideCloud)
+                    {
+                        exitDepth = length(rayPos - rayOrigin);
+                        totalCloudDepth += exitDepth - entryDepth;
+                        break;
+                    }
+                }
+                
+                rayPos += rayDir * stepSize;
+                tEnter += stepSize;
+            }
+            
+            if (isInsideCloud)
+            {
+                exitDepth = length(rayPos - rayOrigin);
+                totalCloudDepth += exitDepth - entryDepth;
+            }
+            
+            //color = localColor * localAlpha + color * alpha * (1 - localAlpha);
+            //alpha = localAlpha + alpha * (1 - localAlpha);
+            localDepth = totalCloudDepth - localDepth;
+            color += localColor * localDepth;
+            alpha += localAlpha * localDepth;
+
+        }
+    }
+    
+    if (totalCloudDepth > 0.0)
+    {
+        float depthColor = clamp(totalCloudDepth / maxDistance, 0, 1);
+        color = color / totalCloudDepth;
+        alpha = alpha / totalCloudDepth;
+        Result[id.xy] = float4(color, alpha);
+    }
+    else
+    {
+        Result[id.xy] = float4(0, 0, 0, 0);
+    }
+}
+
+
+[numthreads(8, 8, 1)]
+void Depth(uint3 id : SV_DispatchThreadID)
+{
+    CameraData camera = cameraData[0];
+
+    float2 screenCoord = (id.xy + 0.5) / float2(camera.textureWidth, camera.textureHeight);
+    float2 ndcCoord = screenCoord * 2.0 - 1.0;
+
+    float3 rayDir;
+    rayDir.x = ndcCoord.x * tan(camera.fov * 0.5 * 3.14159 / 180.0) * camera.aspectRatio;
+    rayDir.y = ndcCoord.y * tan(camera.fov * 0.5 * 3.14159 / 180.0);
+    rayDir.z = 1.0;
+
+    rayDir = normalize(rayDir);
+    rayDir = RotateRayDirection(rayDir, camera.rotation);
+
+    float3 rayOrigin = camera.position;
+    float3 rayPos = rayOrigin;
+
+    float3 color = float3(0.0, 0.0, 0.0);
+    float alpha = 0.0;
+
+    float totalCloudDepth = 0.0;
+    
+    for (int i = 0; i < boxCount; i++)
+    {
+        float tEnter, tExit;
+        if (RayBoxIntersection(rayOrigin, rayDir, boxData[i].position, boxData[i].size, tEnter, tExit))
+        {
+            rayPos = rayOrigin + rayDir * tEnter;
+
+            bool isInsideCloud = false;
+            float entryDepth = 0.0f;
+            float exitDepth = 0.0f;
+            
+            while (tEnter < tExit)
+            {
+                float distanceToSurface = MinDistanceToBoxes(rayPos);
+                float step = max(distanceToSurface, stepSize);
+
+                if (distanceToSurface < 0.001)
+                {
+                    if (!isInsideCloud)
+                    {
+                        entryDepth = length(rayPos - rayOrigin);
+                        isInsideCloud = true;
+                    }
+                }
+                else
+                {
+                    if (isInsideCloud)
+                    {
+                        exitDepth = length(rayPos - rayOrigin);
+                        totalCloudDepth += exitDepth - entryDepth;
+                        break;
+                    }
+                }
+                
+                rayPos += rayDir * step;
+                tEnter += step;
+            }
+            
+            if (isInsideCloud)
+            {
+                exitDepth = length(rayPos - rayOrigin);
+                totalCloudDepth += exitDepth - entryDepth;
+            }
+        }
+    }
+    
+    if (totalCloudDepth > 0.0)
+    {
+        float c = clamp(totalCloudDepth / maxDistance, 0, 1);
+        color = float3(c, c, c);
+        alpha = 0.9;
+    }
+
+    Result[id.xy] = float4(color, alpha);
+}
+
+[numthreads(8, 8, 1)]
+void Box(uint3 id : SV_DispatchThreadID)
+{
+    CameraData camera = cameraData[0];
+    
+    float2 screenCoord = (id.xy + 0.5) / float2(camera.textureWidth, camera.textureHeight);
+    float2 ndcCoord = screenCoord * 2.0 - 1.0;
+    
+    float3 rayDir;
+    rayDir.x = ndcCoord.x * tan(camera.fov * 0.5 * 3.14159 / 180.0) * camera.aspectRatio;
+    rayDir.y = ndcCoord.y * tan(camera.fov * 0.5 * 3.14159 / 180.0);
+    rayDir.z = 1.0;
+    
+    rayDir = normalize(rayDir);
+    
+    rayDir = RotateRayDirection(rayDir, camera.rotation);
+    
+    float3 rayOrigin = camera.position;
+    float3 rayPos = rayOrigin;
+    float stepSize = 0.25;
+    float maxDistance = 1000.0;
+    
+    float3 color = float3(0.0, 0.0, 0.0);
+    float alpha = 0.0;
+    
+    for (int b = 0; b < boxCount; b++)
+    {
+        rayPos = rayOrigin;
+        BoxData box = boxData[b];
+        float3 boxMin = box.position - (box.size / 2.0);
+        float3 boxMax = box.position + (box.size / 2.0);
+        
+        float distanceTraveled = 0.0;
+        bool insideBox = false;
+        
+        for (int i = 0; i < 500; i++)
+        {
+            if (rayPos.x >= boxMin.x && rayPos.x <= boxMax.x && rayPos.y >= boxMin.y && rayPos.y <= boxMax.y && rayPos.z >= boxMin.z && rayPos.z <= boxMax.z) {
+                insideBox = true;
+                color = color.xyz * (1 - alpha) + box.color.xyz * box.color.a;
+                alpha += box.color.a * (1 - alpha);
+                break;
+            }
+        
+            rayPos += rayDir * stepSize;
+            distanceTraveled += stepSize;
+        
+            if (distanceTraveled > maxDistance)
+            {
+                break;
+            }
+        }
+    }
+    
+    Result[id.xy] = float4(color, alpha);
+}
+
+/*
+
+
+To Track with each Ray
+
+After entering a cloud, keep track that it has entered a cloud and record the depth until it reaches the end of the cloud.
+After exiting the cloud. Generate the texture for the pixel at that coordinate.
+Keep moving the ray along. And keep doing this generating more of the textures for the pixel at that coordinate and adding it to the previous pixel
+
+
+It seems that with one ray against all boxes, it will end up taking much smaller steps between each box...
+Whereas if I use 1 ray per box for each pixel, then it will take larger steps however if it doesn't end up colliding with more than one box then it will end up wasting 
+
+
+
+
+
+
+
+*/
