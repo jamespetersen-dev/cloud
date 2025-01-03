@@ -26,7 +26,7 @@ public class Cloud : MonoBehaviour
         if (previousPosition != transform.position || previousLocalScale != transform.localScale) {
             previousPosition = transform.position;
             previousLocalScale = transform.localScale;
-            FindAnyObjectByType<Raymarcher>().UpdateCloud();
+            FindObjectOfType<Raymarcher>().UpdateCloud();
         }
     }
     private void OnDrawGizmos() {

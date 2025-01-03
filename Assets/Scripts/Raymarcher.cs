@@ -43,7 +43,7 @@ public class Raymarcher : MonoBehaviour
     CameraData cameraData;
 
     void Start() {
-        cloud = FindObjectsByType<Cloud>(FindObjectsSortMode.None);
+        cloud = FindObjectsOfType<Cloud>();
 
         UpdateCloud();
 
