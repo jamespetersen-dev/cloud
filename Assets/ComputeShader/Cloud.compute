@@ -25,6 +25,7 @@ struct CameraData {
 RWTexture2D<float4> Result;
 StructuredBuffer<BoxData> boxData;
 StructuredBuffer<CameraData> cameraData;
+RWTexture3D<float4> cloudDensity;
 
 int boxCount;
 int maxStepCount;
