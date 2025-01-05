@@ -1,7 +1,7 @@
 #pragma kernel Box
 #pragma kernel Depth
 #pragma kernel SteppedDepth
-#pragma kernel Cloud
+#pragma kernel CloudDensity
 
 
 struct BoxData {
@@ -25,12 +25,13 @@ struct CameraData {
 RWTexture2D<float4> Result;
 StructuredBuffer<BoxData> boxData;
 StructuredBuffer<CameraData> cameraData;
-RWTexture3D<float4> cloudDensity;
+RWStructuredBuffer<float4> cloudDensity;
 
 int boxCount;
 int maxStepCount;
 float maxDistance;
 float stepSize;
+float noiseResolution;
 
 float3 RotateRayDirection(float3 dir, float4 quat)
 {
@@ -89,7 +90,7 @@ bool RayBoxIntersection(float3 rayOrigin, float3 rayDir, float3 boxPosition, flo
 }
 
 [numthreads(8, 8, 1)]
-void Cloud(uint3 id : SV_DispatchThreadID)
+void CloudDensity(uint3 id : SV_DispatchThreadID)
 {
     CameraData camera = cameraData[0];
 
@@ -111,6 +112,10 @@ void Cloud(uint3 id : SV_DispatchThreadID)
     float alpha = 0.0;
 
     float totalCloudDepth = 0.0;
+    float totalCloudDensity = 0.0;
+    float firstDensity = -1.0f;
+    float firstDensityDepth = 100000.0;
+    int stepCount = 0;
     
     for (int i = 0; i < boxCount; i++)
     {
@@ -121,8 +126,26 @@ void Cloud(uint3 id : SV_DispatchThreadID)
         float tEnter, tExit;
         if (RayBoxIntersection(rayOrigin, rayDir, boxData[i].position, boxData[i].size, tEnter, tExit))
         {
-            tEnter = ceil(tEnter * stepSize);
+            //tEnter = ceil(tEnter * stepSize);
             rayPos = rayOrigin + rayDir * tEnter;
+            
+            float3 localRayPos = (rayPos - boxData[i].position) / boxData[i].size;
+            localRayPos += 1;
+            localRayPos /= 2;
+            localRayPos *= noiseResolution;
+            
+            int3 voxelIndex = int3(floor(localRayPos));
+            
+            int linearIndex = voxelIndex.x 
+                + voxelIndex.y * noiseResolution
+                + voxelIndex.z * noiseResolution * noiseResolution;
+            
+            if (firstDensity < 0.0 || firstDensityDepth > length(rayPos - rayOrigin))
+            {
+                firstDensity = cloudDensity[linearIndex].r;
+                firstDensityDepth = length(rayPos - rayOrigin);
+
+            }
             
             bool isInsideCloud = false;
             float entryDepth = 0.0f;
@@ -145,10 +168,21 @@ void Cloud(uint3 id : SV_DispatchThreadID)
                     if (isInsideCloud)
                     {
                         exitDepth = length(rayPos - rayOrigin);
+                        
                         totalCloudDepth += exitDepth - entryDepth;
                         break;
                     }
                 }
+                
+                /*
+                float3 localRayPos = saturate((rayPos - boxData[i].position) / boxData[i].size);
+                localRayPos = clamp(floor(localRayPos * noiseResolution), 0, noiseResolution - 1);
+                int linearIndex = int(localRayPos.x)
+                                + int(localRayPos.y) * noiseResolution
+                                + int(localRayPos.z) * noiseResolution * noiseResolution;
+                //float value = cloudDensity[linearIndex].r;
+                totalCloudDensity += cloudDensity[linearIndex].r;
+                stepCount += 1;*/
                 
                 rayPos += rayDir * stepSize;
                 tEnter += stepSize;
@@ -171,10 +205,11 @@ void Cloud(uint3 id : SV_DispatchThreadID)
     
     if (totalCloudDepth > 0.0)
     {
-        float depthColor = clamp(totalCloudDepth / maxDistance, 0, 1);
+        float densityColor = firstDensity; //clamp((totalCloudDensity / stepCount) / 10, 0, 1);
+        densityColor *= 2;
         color = color / totalCloudDepth;
         alpha = alpha / totalCloudDepth;
-        Result[id.xy] = float4(color, alpha);
+        Result[id.xy] = float4(densityColor, densityColor, densityColor, 1);
     }
     else
     {

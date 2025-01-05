@@ -8,25 +8,22 @@ int points;
 [numthreads(4, 4, 4)]
 void CSMain(uint3 id : SV_DispatchThreadID)
 {
-    if (id.x < resolution && id.y < resolution && id.z < resolution)
+    int linearIndex = id.x + id.y * resolution + id.z * resolution * resolution;
+        
+    float minDistance = 10000;
+    for (int i = 0; i < points; i++)
     {
-        int linearIndex = id.x + id.y * resolution + id.z * resolution * resolution;
-        
-        float minDistance = 10000;
-        for (int i = 0; i < points; i++)
+        float distance = length(pointData[i] - id.xyz);
+        if (distance < minDistance)
         {
-            float distance = length(pointData[i] - id.xyz);
-            if (distance < minDistance)
-            {
-                minDistance = distance;
-            }
+            minDistance = distance;
         }
+    }
         
-        float color = minDistance / resolution;
-        Result[linearIndex] = float4(color, color, color, 1);
-        if (minDistance <= 0.01f)
-        {
-            Result[linearIndex] = float4(1, 0, 0, 1);
-        }
+    float color = minDistance / resolution;
+    Result[linearIndex] = float4(color, color, color, 1);
+    if (minDistance <= 0.01f)
+    {
+        Result[linearIndex] = float4(1, 1, 1, 1);
     }
 }

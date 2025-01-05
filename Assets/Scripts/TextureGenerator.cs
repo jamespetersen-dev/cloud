@@ -18,7 +18,7 @@ public abstract class TextureGenerator : MonoBehaviour
     }
     void SetTexture(Texture3D texture) {
         this.texture = texture;
-        ApplyTextureToQuad(texture);
+        //ApplyTextureToQuad(texture);
     }
     void ApplyTextureToQuad(Texture2D texture) {
         // Get the Renderer component from the GameObject the script is attached to
@@ -29,6 +29,16 @@ public abstract class TextureGenerator : MonoBehaviour
         // Assign the generated texture to the quad's material
         if (renderer != null && renderer.material != null) {
             renderer.material.mainTexture = texture;
+        }
+    }
+    public Texture3D GetTexture() {
+        if (texture != null) {
+            return texture as Texture3D;
+        }
+        else {
+            Texture3D t = Generate3DTexture();
+            this.texture = t;
+            return t;
         }
     }
     void ApplyTextureToQuad(Texture3D texture) {
