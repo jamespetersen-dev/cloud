@@ -11,9 +11,25 @@ public class Generate3DTexture : MonoBehaviour {
 
     [SerializeField, Range(1, 512)] private int resolution = 256;
     [SerializeField, Range(1, 256)] private int points = 10;
+    [SerializeField, Range(0, 1)] float offsetX, offsetY, offsetZ;
+    [SerializeField, Range(0, 1024)] int seed;
     [SerializeField] private ComputeShader voronoiCompute;
+    Vector3[] pointsPositions;
+    private Vector4 o;
+    private void Start() {
+        Random.InitState(seed);
+        o = new Vector4(offsetX, offsetY, offsetZ, 0);
+        New();
+    }
+    void Update() {
+        if (offsetX != o.x || offsetY != o.y || offsetZ != o.z) {
+            o = new Vector4(offsetX, offsetY, offsetZ, 0);
+            MeshRenderer renderer = GetComponent<MeshRenderer>();
+            renderer.material.SetVector("_Offset", new Vector4(offsetX, offsetY, offsetZ, 0));
+        }
+    }
 
-    void Start() {
+    void New() {
         texture3D = GenerateNoiseTexture();
 
         // Assign the texture to the material
@@ -44,15 +60,18 @@ public class Generate3DTexture : MonoBehaviour {
             Debug.LogError("Resolution and Points must be greater than zero!");
             return null;
         }
-
         Vector3[] seedPoints = new Vector3[points];
-        for (int i = 0; i < points; i++) {
-            seedPoints[i] = new Vector3(
-                Random.Range(0, resolution),
-                Random.Range(0, resolution),
-                Random.Range(0, resolution)
-            );
+        if (pointsPositions == null || pointsPositions.Length != points) {
+            for (int i = 0; i < points; i++) {
+                seedPoints[i] = new Vector3(
+                    Random.Range(0, resolution),
+                    Random.Range(0, resolution),
+                    Random.Range(0, resolution)
+                );
+            }
+            this.pointsPositions = seedPoints;
         }
+        seedPoints = pointsPositions;
 
         UpdatePointsBuffer(seedPoints);
         UpdateTextureBuffer();

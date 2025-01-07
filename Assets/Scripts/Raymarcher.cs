@@ -14,6 +14,9 @@ public class Raymarcher : MonoBehaviour
     [SerializeField, Range(1, 256)] private int points = 10;
     [SerializeField] private ComputeShader voronoiCompute;
 
+    [SerializeField, Range(0.001f, 2)] float sampleSize = 1;
+    [SerializeField, Range(0, 1)] float cutoff = 0.5f;
+
     [SerializeField] ComputeShader computeShader;
     [SerializeField] Shader transparentBlitShader;
     Cloud[] cloud;
@@ -36,7 +39,7 @@ public class Raymarcher : MonoBehaviour
     };
 
     public enum Type {
-        Box, Depth, SteppedDepth, CloudDensity
+        Box, Depth, SteppedDepth, SphereNoise, Cloud
     };
 
     ComputeBuffer boxBuffer, cameraBuffer;
@@ -174,8 +177,11 @@ public class Raymarcher : MonoBehaviour
             case Type.SteppedDepth:
                 kernelHandle = computeShader.FindKernel("SteppedDepth");
                 break;
-            case Type.CloudDensity:
-                kernelHandle = computeShader.FindKernel("CloudDensity");
+            case Type.SphereNoise:
+                kernelHandle = computeShader.FindKernel("SphereNoise");
+                break;
+            case Type.Cloud:
+                kernelHandle = computeShader.FindKernel("Cloud");
                 break;
         }
         computeShader.SetInt("boxCount", cloud.Length);
@@ -183,6 +189,8 @@ public class Raymarcher : MonoBehaviour
         computeShader.SetFloat("maxDistance", maxDistance);
         computeShader.SetFloat("stepSize", stepSize);
         computeShader.SetFloat("noiseResolution", resolution);
+        computeShader.SetFloat("sampleSize", sampleSize);
+        computeShader.SetFloat("cutoff", cutoff);
         computeShader.SetBuffer(kernelHandle, "boxData", boxBuffer);
         computeShader.SetBuffer(kernelHandle, "cameraData", cameraBuffer);
         computeShader.SetTexture(kernelHandle, "Result", renderTexture);

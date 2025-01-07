@@ -9,19 +9,66 @@ int points;
 void CSMain(uint3 id : SV_DispatchThreadID)
 {
     int linearIndex = id.x + id.y * resolution + id.z * resolution * resolution;
-        
+
     float minDistance = 10000;
+
+    // Loop through all Voronoi points
     for (int i = 0; i < points; i++)
     {
-        float distance = length(pointData[i] - id.xyz);
-        if (distance < minDistance)
+        // Get the current Voronoi point
+        float3 p = pointData[i];
+
+        // Calculate the neighbors' positions by adding offsets to the point
+        float3 neighbors[27];
+        neighbors[0] = p + float3(resolution, 0, 0); // +X
+        neighbors[1] = p + float3(-resolution, 0, 0); // -X
+        neighbors[2] = p + float3(0, resolution, 0); // +Y
+        neighbors[3] = p + float3(0, -resolution, 0); // -Y
+        neighbors[4] = p + float3(0, 0, resolution); // +Z
+        neighbors[5] = p + float3(0, 0, -resolution); // -Z
+
+        neighbors[6] = p + float3(resolution, resolution, 0); // +X, +Y
+        neighbors[7] = p + float3(resolution, -resolution, 0); // +X, -Y
+        neighbors[8] = p + float3(-resolution, resolution, 0); // -X, +Y
+        neighbors[9] = p + float3(-resolution, -resolution, 0); // -X, -Y
+        
+        neighbors[10] = p + float3(resolution, 0, resolution); // +X, +Z
+        neighbors[11] = p + float3(resolution, 0, -resolution); // +X, -Z
+        neighbors[12] = p + float3(-resolution, 0, resolution); // -X, +Z
+        neighbors[13] = p + float3(-resolution, 0, -resolution); // -X, -Z
+        
+        neighbors[14] = p + float3(0, resolution, resolution); // +Y, +Z
+        neighbors[15] = p + float3(0, resolution, -resolution); // +Y, -Z
+        neighbors[16] = p + float3(0, -resolution, resolution); // -Y, +Z
+        neighbors[17] = p + float3(0, -resolution, -resolution); // -Y, -Z
+
+        neighbors[18] = p + float3(resolution, resolution, resolution); // +X, +Y, +Z
+        neighbors[19] = p + float3(resolution, resolution, -resolution); // +X, +Y, -Z
+        neighbors[20] = p + float3(resolution, -resolution, resolution); // +X, -Y, +Z
+        neighbors[21] = p + float3(resolution, -resolution, -resolution); // +X, -Y, -Z
+        neighbors[22] = p + float3(-resolution, resolution, resolution); // -X, +Y, +Z
+        neighbors[23] = p + float3(-resolution, resolution, -resolution); // -X, +Y, -Z
+        neighbors[24] = p + float3(-resolution, -resolution, resolution); // -X, -Y, +Z
+        neighbors[25] = p + float3(-resolution, -resolution, -resolution); // -X, -Y, -Z
+        
+        neighbors[26] = p + float3(0, 0, 0);
+        
+        // Check all the neighbors
+        for (int j = 0; j < 27; j++)
         {
-            minDistance = distance;
+            float distance = length(neighbors[j] - id.xyz);
+            if (distance < minDistance)
+            {
+                minDistance = distance;
+            }
         }
     }
-        
+
+    // Normalize the distance to create a texture pattern
     float color = minDistance / resolution;
     Result[linearIndex] = float4(color, color, color, 1);
+
+    // Mark points that are exactly at a Voronoi site
     if (minDistance <= 0.01f)
     {
         Result[linearIndex] = float4(1, 1, 1, 1);
