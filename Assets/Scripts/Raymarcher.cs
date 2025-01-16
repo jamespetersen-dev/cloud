@@ -15,7 +15,8 @@ public class Raymarcher : MonoBehaviour
     [SerializeField] private ComputeShader voronoiCompute;
 
     [SerializeField, Range(0.001f, 2)] float sampleSize = 1;
-    [SerializeField, Range(0, 1)] float cutoff = 0.5f;
+    [SerializeField, Range(0, 16)] float densityMultiplier = 1.0f;
+    [SerializeField] Vector3 samplePos;
 
     [SerializeField] ComputeShader computeShader;
     [SerializeField] Shader transparentBlitShader;
@@ -190,7 +191,8 @@ public class Raymarcher : MonoBehaviour
         computeShader.SetFloat("stepSize", stepSize);
         computeShader.SetFloat("noiseResolution", resolution);
         computeShader.SetFloat("sampleSize", sampleSize);
-        computeShader.SetFloat("cutoff", cutoff);
+        computeShader.SetVector("samplePos", samplePos);
+        computeShader.SetFloat("densityMultiplier", densityMultiplier);
         computeShader.SetBuffer(kernelHandle, "boxData", boxBuffer);
         computeShader.SetBuffer(kernelHandle, "cameraData", cameraBuffer);
         computeShader.SetTexture(kernelHandle, "Result", renderTexture);

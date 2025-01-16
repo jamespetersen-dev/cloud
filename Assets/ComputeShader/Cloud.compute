@@ -34,7 +34,8 @@ float maxDistance;
 float stepSize;
 float noiseResolution;
 float sampleSize;
-float cutoff;
+float densityMultiplier;
+float3 samplePos;
 
 float3 RotateRayDirection(float3 dir, float4 quat)
 {
@@ -92,6 +93,18 @@ bool RayBoxIntersection(float3 rayOrigin, float3 rayDir, float3 boxPosition, flo
     return tExit > max(tEnter, 0.0); // Valid intersection if tExit > tEnter and both are positive
 }
 
+float DistToEdge(float3 position, float3 boxCenter, float3 boxSize)
+{
+    float3 boxMin = boxCenter - boxSize;
+    float3 boxMax = boxCenter + boxSize;
+    
+    float3 clampedPosition = clamp(position, boxMin, boxMax);
+    
+    float3 distanceVec = position - clampedPosition;
+    
+    return length(distanceVec);
+}
+
 
 [numthreads(8, 8, 1)]
 void Cloud(uint3 id : SV_DispatchThreadID)
@@ -115,6 +128,10 @@ void Cloud(uint3 id : SV_DispatchThreadID)
     float totalCloudDepth = 0.0;
     float totalCloudDensity = 0.0;
     int stepCount = 0;
+    
+    float3 color = float3(0, 0, 0);
+    float alpha = 0;
+    float transmittance = 1;
     
     for (int i = 0; i < boxCount; i++)
     {
@@ -154,12 +171,18 @@ void Cloud(uint3 id : SV_DispatchThreadID)
                     }
                 }
             
-                int3 voxelIndex = int3(frac(rayPos * sampleSize) * noiseResolution);
+                int3 voxelIndex = int3(frac((rayPos + samplePos) * sampleSize) * noiseResolution);
             
                 int linearIndex = floor(voxelIndex.x + voxelIndex.y * noiseResolution + voxelIndex.z * noiseResolution * noiseResolution);
                 
-                float stepBoxDensity = cloudDensity[linearIndex].g;
+                float stepBoxDensity = cloudDensity[linearIndex].r * densityMultiplier;
+                float opacity = 1.0 - exp(-stepBoxDensity * stepSize);
                 
+                color += transmittance * boxData[i].color.rgb * opacity;
+                alpha += opacity;
+                
+                transmittance *= (1.0 - opacity);
+                if (transmittance < 0.01) break;
                 
                 totalCloudDensity += stepBoxDensity;
                 stepCount++;
@@ -180,10 +203,9 @@ void Cloud(uint3 id : SV_DispatchThreadID)
         }
     }
     
-    if (totalCloudDensity > 0)
+    if (alpha > 0.01)
     {
-        
-        Result[id.xy] = float4(1, 1, 1, 1);
+        Result[id.xy] = float4(clamp(color * 1.1, 0, 1), alpha);
     }
     else
     {
@@ -294,7 +316,7 @@ void SphereNoise(uint3 id : SV_DispatchThreadID)
     }
     
     float averageDensity = totalCloudDensity / stepCount * 8;
-    if (averageDensity > cutoff && sphere)
+    if (averageDensity > 0.1 && sphere)
     {
         color = color / totalCloudDepth;
         alpha = alpha / totalCloudDepth;
