@@ -386,13 +386,20 @@ MonoBehaviour:
   maxStepCount: 100
   maxDistance: 10
   stepSize: 0.01
-  type: 4
+  type: 5
   resolution: 512
   points: 128
+  detailPoints: 20
   voronoiCompute: {fileID: 7200000, guid: 7f4160ce3d8f77d4db5ddf86e773083e, type: 3}
-  sampleSize: 0.25
-  densityMultiplier: 7.3
+  sampleSize: 0.057
+  densityMultiplier: 0.26
   samplePos: {x: 0, y: 0, z: 0}
+  detailSampleSize: 0.31
+  detailDensityMultiplier: 4.2
+  detailSamplePos: {x: 0, y: 0, z: 0}
+  invertNoise: 1
+  sigmoidMiddle: 0.083
+  sigmoidScale: 28.3
   computeShader: {fileID: 7200000, guid: 41259ead9a0f67f47accfaba60c4a4ba, type: 3}
   transparentBlitShader: {fileID: 4800000, guid: 3e534db7212638f4390aab56af89fd68, type: 3}
 --- !u!1 &1141296958
@@ -608,7 +615,7 @@ Transform:
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 10.46, y: 3.31, z: 0.59}
-  m_LocalScale: {x: 10, y: 2, z: 10}
+  m_LocalScale: {x: 10, y: 2, z: 30}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 1405627050}

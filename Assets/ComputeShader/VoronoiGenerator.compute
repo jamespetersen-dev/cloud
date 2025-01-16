@@ -4,6 +4,7 @@ RWStructuredBuffer<float4> Result;
 StructuredBuffer<float3> pointData;
 int resolution; 
 int points; 
+bool invertNoise;
 
 [numthreads(4, 4, 4)]
 void CSMain(uint3 id : SV_DispatchThreadID)
@@ -66,7 +67,14 @@ void CSMain(uint3 id : SV_DispatchThreadID)
 
     // Normalize the distance to create a texture pattern
     float color = minDistance / resolution;
-    Result[linearIndex] = float4(color, color, color, 1);
+    float invertColor = 1 - color;
+    if (invertNoise)
+    {
+        invertColor = color;
+        color = 1 - color;
+    }
+    color = clamp(color, 0, 1);
+    Result[linearIndex] = float4(color, invertColor, color, 1);
 
     // Mark points that are exactly at a Voronoi site
     if (minDistance <= 0.01f)

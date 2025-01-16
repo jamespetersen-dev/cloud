@@ -3,6 +3,7 @@
 #pragma kernel SteppedDepth
 #pragma kernel SphereNoise
 #pragma kernel Cloud
+#pragma kernel Clouds
 
 
 struct BoxData {
@@ -26,16 +27,18 @@ struct CameraData {
 RWTexture2D<float4> Result;
 StructuredBuffer<BoxData> boxData;
 StructuredBuffer<CameraData> cameraData;
-RWStructuredBuffer<float4> cloudDensity;
+RWStructuredBuffer<float4> cloudDensity, cloudDetailDensity;
+
 
 int boxCount;
 int maxStepCount;
 float maxDistance;
 float stepSize;
 float noiseResolution;
-float sampleSize;
-float densityMultiplier;
-float3 samplePos;
+float sampleSize, detailSampleSize;
+float densityMultiplier, detailDensityMultiplier;
+float3 samplePos, detailSamplePos;
+float sigmoidMiddle, sigmoidScale;
 
 float3 RotateRayDirection(float3 dir, float4 quat)
 {
@@ -104,6 +107,131 @@ float DistToEdge(float3 position, float3 boxCenter, float3 boxSize)
     
     return length(distanceVec);
 }
+
+float sigmoid(float value, float a, float k, float b)
+{
+    return 1 / 1 + exp(-a * ((value / b) - k));
+}
+
+[numthreads(8, 8, 1)]
+void Clouds(uint3 id : SV_DispatchThreadID)
+{
+    CameraData camera = cameraData[0];
+
+    float2 screenCoord = (id.xy + 0.5) / float2(camera.textureWidth, camera.textureHeight);
+    float2 ndcCoord = screenCoord * 2.0 - 1.0;
+
+    float3 rayDir;
+    rayDir.x = ndcCoord.x * tan(camera.fov * 0.5 * 3.14159 / 180.0) * camera.aspectRatio;
+    rayDir.y = ndcCoord.y * tan(camera.fov * 0.5 * 3.14159 / 180.0);
+    rayDir.z = 1.0;
+
+    rayDir = normalize(rayDir);
+    rayDir = RotateRayDirection(rayDir, camera.rotation);
+
+    float3 rayOrigin = camera.position;
+    float3 rayPos = rayOrigin;
+
+    float totalCloudDepth = 0.0;
+    float totalCloudDensity = 0.0;
+    int stepCount = 0;
+    
+    float3 color = float3(0, 0, 0);
+    float alpha = 0;
+    float transmittance = 1;
+    
+    for (int i = 0; i < boxCount; i++)
+    {
+        float boxDepth = totalCloudDepth;
+        float boxDensity = totalCloudDensity;
+        
+        float tEnter, tExit;
+        if (RayBoxIntersection(rayOrigin, rayDir, boxData[i].position, boxData[i].size, tEnter, tExit))
+        {
+            tEnter = ceil(tEnter / stepSize) * stepSize;
+            rayPos = rayOrigin + rayDir * tEnter;
+            
+            bool isInsideCloud = false;
+            float entryDepth = 0.0f;
+            float exitDepth = 0.0f;
+            
+            while (tEnter < tExit)
+            {
+                float distanceToSurface = MinDistanceToBox(rayPos, i);
+
+                if (distanceToSurface < 0.001)
+                {
+                    if (!isInsideCloud)
+                    {
+                        entryDepth = length(rayPos - rayOrigin);
+                        isInsideCloud = true;
+                    }
+                }
+                else
+                {
+                    if (isInsideCloud)
+                    {
+                        exitDepth = length(rayPos - rayOrigin);
+                        
+                        totalCloudDepth += exitDepth - entryDepth;
+                        break;
+                    }
+                }
+            
+                int3 voxelIndex = int3(frac((rayPos + samplePos) * sampleSize) * noiseResolution);
+                int3 detailVoxelIndex = int3(frac((rayPos + detailSamplePos) * detailSampleSize) * noiseResolution);
+            
+                int linearIndex = floor(voxelIndex.x + voxelIndex.y * noiseResolution + voxelIndex.z * noiseResolution * noiseResolution);
+                int detailLinearIndex = floor(detailVoxelIndex.x + detailVoxelIndex.y * noiseResolution + detailVoxelIndex.z * noiseResolution * noiseResolution);
+                
+                float mainBoxDensity = (sigmoid(cloudDensity[linearIndex].g, sigmoidScale, sigmoidMiddle, 1) * densityMultiplier);
+                float detailBoxDensity = (cloudDetailDensity[detailLinearIndex].g * detailDensityMultiplier);
+                if (mainBoxDensity < 0.4)
+                {
+                    mainBoxDensity = (sigmoid(mainBoxDensity, 5, 1, 0.4) * 0.4) - 0.4;
+                    mainBoxDensity = clamp(mainBoxDensity, 0, 1);
+                }
+                
+                float stepBoxDensity = mainBoxDensity * detailBoxDensity;
+                stepBoxDensity /= 2.0;
+                float opacity = 1.0 - exp(-stepBoxDensity * stepSize);
+                
+                color += transmittance * boxData[i].color.rgb * opacity;
+                alpha += opacity;
+                
+                transmittance *= (1.0 - opacity);
+                if (transmittance < 0.01)
+                    break;
+                
+                totalCloudDensity += stepBoxDensity;
+                stepCount++;
+                
+                rayPos += rayDir * stepSize;
+                tEnter += stepSize;
+            }
+            
+            if (isInsideCloud)
+            {
+                exitDepth = length(rayPos - rayOrigin);
+                totalCloudDepth += exitDepth - entryDepth;
+            }
+            
+            boxDepth = totalCloudDepth - boxDepth;
+            boxDensity = totalCloudDensity - boxDensity;
+
+        }
+    }
+    
+    if (alpha > 0.01)
+    {
+        Result[id.xy] = float4(clamp(color * 1.1, 0, 1), alpha);
+    }
+    else
+    {
+        Result[id.xy] = float4(0, 0, 0, 0);
+    }
+}
+
 
 
 [numthreads(8, 8, 1)]

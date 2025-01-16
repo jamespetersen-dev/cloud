@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using Unity.VisualScripting.Antlr3.Runtime.Tree;
 using UnityEngine;
 
 public class Raymarcher : MonoBehaviour
@@ -12,11 +13,19 @@ public class Raymarcher : MonoBehaviour
     //[SerializeField] Texture3D noiseTexture;
     [SerializeField, Range(1, 512)] private int resolution = 256;
     [SerializeField, Range(1, 256)] private int points = 10;
+    [SerializeField, Range(1, 256)] private int detailPoints = 10;
     [SerializeField] private ComputeShader voronoiCompute;
 
-    [SerializeField, Range(0.001f, 2)] float sampleSize = 1;
-    [SerializeField, Range(0, 16)] float densityMultiplier = 1.0f;
+    [SerializeField, Range(0.001f, 0.5f)] float sampleSize = 1;
+    [SerializeField, Range(0, 1)] float densityMultiplier = 1.0f;
     [SerializeField] Vector3 samplePos;
+    [SerializeField, Range(0.001f, 1)] float detailSampleSize = 1;
+    [SerializeField, Range(0, 8)] float detailDensityMultiplier = 1.0f;
+    [SerializeField] Vector3 detailSamplePos;
+
+    [SerializeField] bool invertNoise;
+    [SerializeField, Range(0, 1)] float sigmoidMiddle = 0.5f;
+    [SerializeField, Range(0, 100)] float sigmoidScale = 10;
 
     [SerializeField] ComputeShader computeShader;
     [SerializeField] Shader transparentBlitShader;
@@ -40,13 +49,13 @@ public class Raymarcher : MonoBehaviour
     };
 
     public enum Type {
-        Box, Depth, SteppedDepth, SphereNoise, Cloud
+        Box, Depth, SteppedDepth, SphereNoise, Cloud, Clouds
     };
 
     ComputeBuffer boxBuffer, cameraBuffer;
     Material transparentBlitMaterial;
     RenderTexture renderTexture;
-    ComputeBuffer pointBuffer, textureBuffer;
+    ComputeBuffer pointBuffer, textureBuffer, detailTextureBuffer;
 
     BoxData[] boxData;
     CameraData cameraData;
@@ -66,7 +75,10 @@ public class Raymarcher : MonoBehaviour
         transparentBlitMaterial = new Material(transparentBlitShader);
 
         if (textureBuffer == null) {
-            textureBuffer = GenerateNoiseTexture();
+            textureBuffer = GenerateNoiseTexture(false, points);
+        }
+        if (detailTextureBuffer == null) {
+            detailTextureBuffer = GenerateNoiseTexture(true, detailPoints);
         }
     }
 
@@ -79,6 +91,10 @@ public class Raymarcher : MonoBehaviour
     void UpdateTextureBuffer() {
         if (textureBuffer != null) textureBuffer.Release();
         textureBuffer = new ComputeBuffer(resolution * resolution * resolution, Marshal.SizeOf(typeof(Color)));
+    }
+    void UpdateDetailTextureBuffer() {
+        if (detailTextureBuffer != null) detailTextureBuffer.Release();
+        detailTextureBuffer = new ComputeBuffer(resolution * resolution * resolution, Marshal.SizeOf(typeof(Color)));
     }
 
     public void UpdateCloud() {
@@ -109,7 +125,7 @@ public class Raymarcher : MonoBehaviour
         cameraBuffer.SetData(new CameraData[] { cameraData });
     }
 
-    ComputeBuffer GenerateNoiseTexture() {
+    ComputeBuffer GenerateNoiseTexture(bool detail, int pointCount) {
         if (voronoiCompute == null) {
             Debug.LogError("Compute Shader is not assigned!");
             return null;
@@ -120,8 +136,8 @@ public class Raymarcher : MonoBehaviour
             return null;
         }
 
-        Vector3[] seedPoints = new Vector3[points];
-        for (int i = 0; i < points; i++) {
+        Vector3[] seedPoints = new Vector3[pointCount];
+        for (int i = 0; i < pointCount; i++) {
             seedPoints[i] = new Vector3(
                 Random.Range(0, resolution),
                 Random.Range(0, resolution),
@@ -130,19 +146,30 @@ public class Raymarcher : MonoBehaviour
         }
 
         UpdatePointsBuffer(seedPoints);
-        UpdateTextureBuffer();
-
+        if (!detail) {
+            UpdateTextureBuffer();
+        }
+        else {
+            UpdateDetailTextureBuffer();
+        }
 
         int kernelHandle = voronoiCompute.FindKernel("CSMain");
         voronoiCompute.SetInt("resolution", resolution);
-        voronoiCompute.SetInt("points", points);
+
+        voronoiCompute.SetInt("points", pointCount);
+
+        voronoiCompute.SetBool("invertNoise", invertNoise);
 
         voronoiCompute.SetBuffer(kernelHandle, "pointData", pointBuffer);
-        voronoiCompute.SetBuffer(kernelHandle, "Result", textureBuffer);
-
+        if (!detail) {
+            voronoiCompute.SetBuffer(kernelHandle, "Result", textureBuffer);
+        }
+        else {
+            voronoiCompute.SetBuffer(kernelHandle, "Result", detailTextureBuffer);
+        }
         int threadGroupSize = Mathf.CeilToInt(resolution / 4.0f);
         voronoiCompute.Dispatch(kernelHandle, threadGroupSize, threadGroupSize, threadGroupSize);
-        
+
         //Texture3D texture = new Texture3D(resolution, resolution, resolution, TextureFormat.ARGB32, false);
 
         //Color[] resultBuffer = new Color[resolution * resolution * resolution];
@@ -152,7 +179,10 @@ public class Raymarcher : MonoBehaviour
         /*texture.SetPixels(resultBuffer, 0);
 
         texture.Apply();*/
-        return textureBuffer;
+        if (!detail) {
+            return textureBuffer;
+        }
+        return detailTextureBuffer;
     }
 
     void OnRenderImage(RenderTexture source, RenderTexture destination) {
@@ -184,6 +214,9 @@ public class Raymarcher : MonoBehaviour
             case Type.Cloud:
                 kernelHandle = computeShader.FindKernel("Cloud");
                 break;
+            case Type.Clouds:
+                kernelHandle = computeShader.FindKernel("Clouds");
+                break;
         }
         computeShader.SetInt("boxCount", cloud.Length);
         computeShader.SetInt("maxStepCount", maxStepCount);
@@ -191,12 +224,18 @@ public class Raymarcher : MonoBehaviour
         computeShader.SetFloat("stepSize", stepSize);
         computeShader.SetFloat("noiseResolution", resolution);
         computeShader.SetFloat("sampleSize", sampleSize);
+        computeShader.SetFloat("detailSampleSize", detailSampleSize);
         computeShader.SetVector("samplePos", samplePos);
+        computeShader.SetVector("detailSamplePos", detailSamplePos);
         computeShader.SetFloat("densityMultiplier", densityMultiplier);
+        computeShader.SetFloat("detailDensityMultiplier", detailDensityMultiplier);
+        computeShader.SetFloat("sigmoidMiddle", sigmoidMiddle);
+        computeShader.SetFloat("sigmoidScale", sigmoidScale);
         computeShader.SetBuffer(kernelHandle, "boxData", boxBuffer);
         computeShader.SetBuffer(kernelHandle, "cameraData", cameraBuffer);
         computeShader.SetTexture(kernelHandle, "Result", renderTexture);
         computeShader.SetBuffer(kernelHandle, "cloudDensity", textureBuffer);
+        computeShader.SetBuffer(kernelHandle, "cloudDetailDensity", detailTextureBuffer);
         /*Color[] c = new Color[resolution * resolution * resolution];
         textureBuffer.GetData(c); Reading back data each frame is incredibly slow
         Debug.Log(c[0]);
@@ -215,6 +254,7 @@ public class Raymarcher : MonoBehaviour
         if (cameraBuffer != null) cameraBuffer.Release();
         if (pointBuffer != null) pointBuffer.Release();
         if (textureBuffer != null) textureBuffer.Release();
+        if (detailTextureBuffer != null) detailTextureBuffer.Release();
     }
     private void OnDisable() {
         if (renderTexture != null) renderTexture.Release();
@@ -222,6 +262,7 @@ public class Raymarcher : MonoBehaviour
         if (cameraBuffer != null) cameraBuffer.Release();
         if (pointBuffer != null) pointBuffer.Release();
         if (textureBuffer != null) textureBuffer.Release();
+        if (detailTextureBuffer != null) detailTextureBuffer.Release();
     }
 
     private void OnDrawGizmos() {
